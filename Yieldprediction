@@ -76,7 +76,6 @@ categorical_transformer = Pipeline([
 ])
 
 preprocessor = ColumnTransformer([
-    ("num", numeric_transformer, numeric_feats),
     ("cat", categorical_transformer, cat_feats)
 ])
 
@@ -102,7 +101,7 @@ print(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
 def get_feature_names(column_transformer):
     num_features = numeric_feats
     cat_features = column_transformer.named_transformers_["cat"].named_steps["onehot"].get_feature_names_out(cat_feats).tolist()
-    return num_features + cat_features
+    return cat_features
 
 feature_names = get_feature_names(preprocessor)
 importances = pipe.named_steps["model"].feature_importances_
