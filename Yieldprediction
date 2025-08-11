@@ -23,7 +23,7 @@ df_tp.columns = [c.strip().lower() for c in df_tp.columns]
 df_t2.columns = [c.strip().lower() for c in df_t2.columns]
 
 
-# parse date to year
+
 for df in (df_tp, df_t2):
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["year"] = df["date"].dt.year
