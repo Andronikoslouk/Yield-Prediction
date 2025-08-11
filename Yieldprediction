@@ -1,0 +1,131 @@
+
+
+import pandas as pd
+import numpy as np
+import pickle
+import matplotlib.pyplot as plt
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+
+df_y = pd.read_csv("yield.csv")
+df_tp = pd.read_csv("tp.csv")
+df_t2 = pd.read_csv("2t.csv")
+
+
+df_y.columns = [c.strip().lower() for c in df_y.columns]
+df_tp.columns = [c.strip().lower() for c in df_tp.columns]
+df_t2.columns = [c.strip().lower() for c in df_t2.columns]
+
+
+# parse date to year
+for df in (df_tp, df_t2):
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["year"] = df["date"].dt.year
+
+
+for df in (df_y, df_tp, df_t2):
+    if "state_name" in df.columns:
+        df.rename(columns={"state_name": "state"}, inplace=True)
+
+
+tp_agg = df_tp.groupby(["state", "year"])["total precipitation"].agg(["sum", "mean", "count"]).reset_index()
+tp_agg.rename(columns={"sum": "tp_sum", "mean": "tp_mean", "count": "tp_count"}, inplace=True)
+
+
+t2_agg = df_t2.groupby(["state", "year"])["2m max temperature"].agg(["mean", "max", "count"]).reset_index()
+t2_agg.rename(columns={"mean": "t2_mean", "max": "t2_max", "count": "t2_count"}, inplace=True)
+
+
+df_y.rename(columns={"yield": "yield_bu_per_acre"}, inplace=True)
+merged = df_y.merge(tp_agg, on=["state", "year"], how="left").merge(t2_agg, on=["state", "year"], how="left")
+
+
+model_df = merged.dropna(subset=["yield_bu_per_acre"]).copy()
+
+
+unique_years = sorted(model_df["year"].unique())
+test_years = unique_years[-3:]  # last 3 years for test
+
+train_df = model_df[~model_df["year"].isin(test_years)].reset_index(drop=True)
+test_df = model_df[model_df["year"].isin(test_years)].reset_index(drop=True)
+
+
+numeric_feats = ["tp_sum", "tp_mean", "tp_count", "t2_mean", "t2_max", "t2_count"]
+cat_feats = ["state"]
+
+X_train = train_df[numeric_feats + cat_feats]
+y_train = train_df["yield_bu_per_acre"]
+X_test = test_df[numeric_feats + cat_feats]
+y_test = test_df["yield_bu_per_acre"]
+
+
+numeric_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler())
+])
+
+categorical_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="constant", fill_value="missing")),
+    ("onehot", OneHotEncoder(handle_unknown="ignore"))
+])
+
+preprocessor = ColumnTransformer([
+    ("num", numeric_transformer, numeric_feats),
+    ("cat", categorical_transformer, cat_feats)
+])
+
+model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1)
+
+pipe = Pipeline([
+    ("pre", preprocessor),
+    ("model", model)
+])
+
+
+pipe.fit(X_train, y_train)
+y_pred = pipe.predict(X_test)
+
+
+mse = mean_squared_error(y_test, y_pred)    # always available
+rmse = mse ** 0.5
+mae  = mean_absolute_error(y_test, y_pred)
+
+print(f"RMSE: {rmse:.4f}, MAE: {mae:.4f}")
+
+
+def get_feature_names(column_transformer):
+    num_features = numeric_feats
+    cat_features = column_transformer.named_transformers_["cat"].named_steps["onehot"].get_feature_names_out(cat_feats).tolist()
+    return num_features + cat_features
+
+feature_names = get_feature_names(preprocessor)
+importances = pipe.named_steps["model"].feature_importances_
+
+feat_imp = pd.DataFrame({
+    "feature": feature_names,
+    "importance": importances
+}).sort_values("importance", ascending=False)
+
+print("\nTop 10 Feature Importances:")
+print(feat_imp.head(10))
+
+
+plt.figure(figsize=(7, 5))
+plt.scatter(y_test, y_pred, alpha=0.7)
+plt.xlabel("Actual yield (bu/acre)")
+plt.ylabel("Predicted yield (bu/acre)")
+plt.title("Actual vs Predicted - Test Set")
+plt.grid(True)
+plt.show()
+
+
+with open("yield_model.pkl", "wb") as f:
+    pickle.dump(pipe, f)
+
+print("Model saved to yield_model.pkl")
